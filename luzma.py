@@ -110,12 +110,12 @@ if menu == "📊 Dashboard":
         st.plotly_chart(px.bar(df_v.groupby('placa')['monto'].sum().reset_index(), x='placa', y='monto', title="Ingresos por Vehículo"), use_container_width=True)
         st.download_button("📥 Descargar Reporte (Excel)", data=to_excel(df_v, df_g, df_v), file_name="Reporte_Luzma.xlsx")
         with st.expander("🔍 Ver detalles de movimientos"):
-            st.write("**Producción:**"); st.dataframe(df_v, use_container_width=True, hide_index=True)
+            st.write("**Ventas:**"); st.dataframe(df_v, use_container_width=True, hide_index=True)
             st.write("**Gastos:**"); st.dataframe(df_g, use_container_width=True, hide_index=True)
 
 # --- 💰 VENTAS (CÁLCULO + CORRECCIÓN) ---
 elif menu == "💰 Ventas":
-    st.title("💰 Producción")
+    st.title("💰 Ventas")
     v_data_v = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     t_data_v = pd.read_sql("SELECT servicio, precio_unidad FROM tarifario", conn)
     tab1, tab2 = st.tabs(["📝 Registro", "✏️ Editar/Borrar"])
