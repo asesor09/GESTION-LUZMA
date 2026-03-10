@@ -28,11 +28,12 @@ def inicializar_db():
             cur.execute("ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS marca TEXT")
             cur.execute("ALTER TABLE vehiculos ADD COLUMN IF NOT EXISTS modelo TEXT")
             
-            # REPARACIÓN DE TABLA VENTAS
+            # REPARACIÓN DE TABLA VENTAS (Añadiendo Detalles)
             cur.execute("CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), fecha DATE)")
             cur.execute("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS servicio TEXT")
             cur.execute("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS cantidad INTEGER")
             cur.execute("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS valor_total NUMERIC")
+            cur.execute("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS detalles TEXT") # Nueva columna solicitada
             
             # REPARACIÓN DE TABLA GASTOS
             cur.execute("CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), fecha DATE)")
@@ -55,111 +56,120 @@ st.title("🧵 Confejeans Luzma: Gestión de Producción")
 
 inicializar_db()
 
-# Menú lateral con todos los módulos solicitados
 menu = st.sidebar.selectbox("📂 Módulos", ["📊 Dashboard", "🚐 Flota", "💸 Gastos", "💰 Registro Ventas", "⚙️ Tarifas"])
 conn = conectar_db()
 
 if conn:
-    # --- DASHBOARD (SOLUCIÓN AL ERROR) ---
+    # --- DASHBOARD (Métrica e Ingresos) ---
     if menu == "📊 Dashboard":
-        st.header("📊 Reporte de Utilidades Reales")
+        st.header("📊 Reporte de Utilidades y Producción")
         try:
-            # Leemos los datos de forma segura
-            df_v = pd.read_sql("SELECT valor_total FROM ventas", conn)
+            df_v = pd.read_sql("SELECT valor_total, fecha FROM ventas", conn)
             df_g = pd.read_sql("SELECT monto FROM gastos", conn)
             
-            # Cálculos con protección contra vacíos
             ingresos = df_v['valor_total'].sum() if not df_v.empty else 0
             egresos = df_g['monto'].sum() if not df_g.empty else 0
             utilidad = ingresos - egresos
             
+            # Métricas principales
             c1, c2, c3 = st.columns(3)
             c1.metric("Ingresos Totales", f"${ingresos:,.0f}")
             c2.metric("Gastos Totales", f"${egresos:,.0f}", delta_color="inverse")
             c3.metric("Utilidad Neta", f"${utilidad:,.0f}")
             
-            # Gráfico de barras de ventas por día
-            df_graf = pd.read_sql("SELECT fecha, SUM(valor_total) as total FROM ventas GROUP BY fecha ORDER BY fecha", conn)
-            if not df_graf.empty:
-                st.plotly_chart(px.bar(df_graf, x='fecha', y='total', title="Ventas por Día", color_discrete_sequence=['#00CC96']), use_container_width=True)
+            # Gráfico de ventas
+            if not df_v.empty:
+                df_graf = df_v.groupby('fecha')['valor_total'].sum().reset_index()
+                st.plotly_chart(px.line(df_graf, x='fecha', y='valor_total', title="Evolución de Producción (Ventas)", markers=True), use_container_width=True)
             else:
-                st.info("👋 Bienvenida Luzma. El gráfico aparecerá cuando registres tu primera venta.")
+                st.info("Aún no hay datos para mostrar gráficos.")
                 
         except Exception as e:
-            st.warning("El Dashboard se está sincronizando con la nueva base de datos...")
+            st.warning("Cargando datos del Dashboard...")
 
-    # --- MÓDULO GASTOS ---
-    elif menu == "💸 Gastos":
-        st.header("💸 Registro de Gastos")
-        v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-        if v_data.empty:
-            st.warning("⚠️ Primero registra un vehículo en el módulo 'Flota'.")
-        else:
-            with st.form("f_g"):
-                v_sel = st.selectbox("Vehículo", v_data['placa'])
-                t_gasto = st.selectbox("Tipo de Gasto", ["Combustible", "Mantenimiento", "Peajes", "Repuestos", "Alimentación", "Otros"])
-                monto = st.number_input("Monto ($)", min_value=0)
-                det = st.text_input("Detalle (Ej: Cambio de aceite)")
-                if st.form_submit_button("💾 Guardar Gasto"):
-                    v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
-                    cur = conn.cursor()
-                    cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", 
-                               (int(v_id), t_gasto, monto, datetime.now().date(), det))
-                    conn.commit(); st.success("Gasto guardado."); st.rerun()
-        
-        st.subheader("Historial de Gastos")
-        try:
-            st.dataframe(pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id", conn), use_container_width=True)
-        except: pass
-
-    # --- MÓDULO VENTAS ---
+    # --- MÓDULO REGISTRO VENTAS (Con Detalles) ---
     elif menu == "💰 Registro Ventas":
         st.header("💰 Liquidación de Trabajo")
         v_df = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
         t_df = pd.read_sql("SELECT * FROM tarifario", conn)
         
         if v_df.empty or t_df.empty:
-            st.error("🛑 Registra primero vehículos y tarifas.")
+            st.error("🛑 Registra primero vehículos y tarifas en sus respectivos módulos.")
         else:
             with st.form("f_v"):
-                vs = st.selectbox("Vehículo", v_df['placa'])
-                ts = st.selectbox("Servicio", t_df['servicio'])
-                cant = st.number_input("Cantidad de piezas", min_value=1)
+                vs = st.selectbox("Vehículo Responsable", v_df['placa'])
+                ts = st.selectbox("Tipo de Servicio", t_df['servicio'])
+                cant = st.number_input("Cantidad de piezas/unidades", min_value=1)
+                
+                # Campo de detalles solicitado
+                detalles_v = st.text_area("Detalles de la producción (Ej: Referencia, lote, observaciones)")
+                
                 pre = t_df[t_df['servicio'] == ts]['precio_unidad'].values[0]
                 total = cant * pre
-                st.info(f"💵 Total a cobrar: ${total:,.0f}")
+                st.info(f"💵 Total calculado: ${total:,.0f}")
                 
-                if st.form_submit_button("✅ Guardar"):
+                if st.form_submit_button("✅ Guardar Producción"):
                     vid = v_df[v_df['placa'] == vs]['id'].values[0]
                     cur = conn.cursor()
-                    cur.execute("INSERT INTO ventas (vehiculo_id, servicio, cantidad, valor_total, fecha) VALUES (%s,%s,%s,%s,%s)", 
-                               (int(vid), ts, int(cant), float(total), datetime.now().date()))
-                    conn.commit(); st.success("Venta guardada."); st.rerun()
+                    cur.execute("""
+                        INSERT INTO ventas (vehiculo_id, servicio, cantidad, valor_total, detalles, fecha) 
+                        VALUES (%s,%s,%s,%s,%s,%s)
+                    """, (int(vid), ts, int(cant), float(total), detalles_v, datetime.now().date()))
+                    conn.commit(); st.success("¡Registro guardado con éxito!"); st.rerun()
+        
+        st.subheader("Últimos Registros")
+        try:
+            st.dataframe(pd.read_sql("SELECT fecha, servicio, cantidad, valor_total, detalles FROM ventas ORDER BY id DESC", conn), use_container_width=True)
+        except: pass
 
-    # (Módulos de Flota y Tarifas se mantienen igual)
+    # --- MÓDULO GASTOS ---
+    elif menu == "💸 Gastos":
+        st.header("💸 Gastos Operativos")
+        v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+        if v_data.empty:
+            st.warning("⚠️ Registra un vehículo primero.")
+        else:
+            with st.form("f_g"):
+                v_sel = st.selectbox("Vehículo", v_data['placa'])
+                t_gasto = st.selectbox("Categoría", ["Combustible", "Mantenimiento", "Peajes", "Repuestos", "Otros"])
+                monto = st.number_input("Valor ($)", min_value=0)
+                det = st.text_input("Descripción del gasto")
+                if st.form_submit_button("💾 Guardar"):
+                    v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
+                    cur = conn.cursor()
+                    cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", 
+                               (int(v_id), t_gasto, monto, datetime.now().date(), det))
+                    conn.commit(); st.success("Gasto registrado."); st.rerun()
+
+    # --- MÓDULO FLOTA ---
     elif menu == "🚐 Flota":
-        st.header("🚐 Gestión de Flota")
+        st.header("🚐 Gestión de Flota (25 Vehículos)")
         with st.form("f_f"):
             c1, c2 = st.columns(2)
             p = c1.text_input("Placa").upper()
             ma = c1.text_input("Marca")
             mo = c2.text_input("Modelo")
-            cond = c2.text_input("Conductor")
-            if st.form_submit_button("➕ Guardar"):
+            cond = c2.text_input("Nombre Conductor")
+            if st.form_submit_button("➕ Registrar"):
                 cur = conn.cursor()
-                cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s) ON CONFLICT (placa) DO UPDATE SET marca=EXCLUDED.marca, modelo=EXCLUDED.modelo, conductor=EXCLUDED.conductor", (p, ma, mo, cond))
-                conn.commit(); st.success("Vehículo guardado"); st.rerun()
-        st.dataframe(pd.read_sql("SELECT * FROM vehiculos", conn), use_container_width=True)
+                cur.execute("""
+                    INSERT INTO vehiculos (placa, marca, modelo, conductor) 
+                    VALUES (%s,%s,%s,%s) 
+                    ON CONFLICT (placa) DO UPDATE SET marca=EXCLUDED.marca, modelo=EXCLUDED.modelo, conductor=EXCLUDED.conductor
+                """, (p, ma, mo, cond))
+                conn.commit(); st.success("Vehículo actualizado"); st.rerun()
+        st.dataframe(pd.read_sql("SELECT placa, marca, modelo, conductor FROM vehiculos", conn), use_container_width=True)
 
+    # --- MÓDULO TARIFAS ---
     elif menu == "⚙️ Tarifas":
-        st.header("⚙️ Tarifas")
+        st.header("⚙️ Configuración de Precios por Unidad")
         with st.form("f_t"):
-            s = st.text_input("Nombre del Servicio (Ej: Corte)")
+            s = st.text_input("Nombre del Servicio (Ej: Lavandería)")
             p = st.number_input("Precio por unidad ($)")
-            if st.form_submit_button("Guardar"):
+            if st.form_submit_button("Guardar Precio"):
                 cur = conn.cursor()
                 cur.execute("INSERT INTO tarifario (servicio, precio_unidad) VALUES (%s,%s) ON CONFLICT (servicio) DO UPDATE SET precio_unidad=EXCLUDED.precio_unidad", (s, p))
-                conn.commit(); st.success("Tarifa actualizada"); st.rerun()
-        st.table(pd.read_sql("SELECT * FROM tarifario", conn))
+                conn.commit(); st.success("Tarifa guardada"); st.rerun()
+        st.table(pd.read_sql("SELECT servicio, precio_unidad FROM tarifario", conn))
 
     conn.close()
