@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import io
 import plotly.express as px
 
-# --- 1. CONEXIÓN SEGURA Y UBICACIÓN ---
+# --- 1. CONEXIÓN SEGURA CON ESQUEMA FORZADO ---
 def conectar_db():
     if "url_luzma" not in st.secrets:
         st.error("❌ Configura 'url_luzma' en los Secrets de Streamlit.")
@@ -13,7 +13,7 @@ def conectar_db():
     try:
         conn = psycopg2.connect(st.secrets["url_luzma"])
         cur = conn.cursor()
-        # ESTA LÍNEA ES LA QUE EVITA EL InvalidSchemaName
+        # Esto soluciona el InvalidSchemaName de raíz
         cur.execute("SET search_path TO public")
         return conn
     except Exception as e:
@@ -24,7 +24,6 @@ def inicializar_db():
     conn = conectar_db()
     if conn:
         cur = conn.cursor()
-        # Todas tus tablas con la lógica que ya funciona
         cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL, marca TEXT, modelo TEXT, conductor TEXT)')
         cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT)')
         cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT, cantidad INTEGER)')
@@ -68,7 +67,7 @@ if not st.session_state.logged_in:
             else: st.sidebar.error("Usuario o clave incorrectos")
     st.stop()
 
-# --- 4. MENÚ ---
+# --- 4. MENÚ (LAS 7 VENTANAS) ---
 st.sidebar.write(f"👋 **{st.session_state.u_name}**")
 target = st.sidebar.number_input("🎯 Meta Utilidad ($)", value=3000000, step=500000)
 menu = st.sidebar.selectbox("📂 MÓDULOS", ["📊 Dashboard", "🚐 Flota", "💸 Gastos", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Tarifas", "⚙️ Usuarios"])
@@ -77,9 +76,8 @@ if st.sidebar.button("🚪 CERRAR SESIÓN"):
     st.session_state.logged_in = False; st.rerun()
 
 conn = conectar_db()
-if not conn: st.stop()
 
-# --- 📊 DASHBOARD (CON EXCEL Y GLOBOS) ---
+# --- 📊 DASHBOARD ---
 if menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación")
     v_veh = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
@@ -99,14 +97,15 @@ if menu == "📊 Dashboard":
         df_v = pd.read_sql(q_v, conn, params=params)
         u_neta = df_v['monto'].sum() - df_g['monto'].sum()
 
-        if u_neta >= target: st.success(f"🏆 Meta Alcanzada: ${u_neta:,.0f}"); st.balloons()
-        else: st.error(f"⚠️ Faltan ${abs(u_neta - target):,.0f}")
+        if u_neta >= target: st.success(f"### 🏆 ¡META ALCANZADA! \n Utilidad: **${u_neta:,.0f}**"); st.balloons()
+        else: st.error(f"### ⚠️ POR DEBAJO DE LA META \n Utilidad: **${u_neta:,.0f}**")
 
         m1, m2, m3 = st.columns(3)
         m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}")
         m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse")
-        m3.metric("Utilidad", f"${u_neta:,.0f}")
+        m3.metric("Utilidad Neta", f"${u_neta:,.0f}")
 
+        # Gráfico
         res_g = df_g.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Gasto'})
         res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Venta'})
         balance_df = pd.merge(res_v, res_g, on='placa', how='outer').fillna(0)
@@ -116,11 +115,12 @@ if menu == "📊 Dashboard":
         with st.expander("🔍 Detalles de Producción"):
             st.dataframe(df_v, use_container_width=True, hide_index=True)
 
-# --- 💰 VENTAS (CON DETALLES Y CÁLCULO) ---
+# --- 💰 VENTAS ---
 elif menu == "💰 Ventas":
     st.title("💰 Registro de Producción")
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     t_data = pd.read_sql("SELECT servicio, precio_unidad FROM tarifario", conn)
+    
     with st.form("f_v"):
         v_sel = st.selectbox("Vehículo", v_data['placa'])
         s_sel = st.selectbox("Servicio", t_data['servicio'].tolist() if not t_data.empty else [])
@@ -128,14 +128,19 @@ elif menu == "💰 Ventas":
         desc = st.text_area("Descripción / Detalles (Lote, Ref)")
         if st.form_submit_button("💰 Guardar"):
             v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
+            # CÁLCULO DE TOTALES
             precio_u = t_data[t_data['servicio'] == s_sel]['precio_unidad'].values[0]
-            total = cant * precio_u
+            total = float(cant * precio_u)
+            
             cur = conn.cursor()
-            cur.execute("SET search_path TO public") # DOBLE SEGURO
-            cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion, cantidad) VALUES (%s,%s,%s,%s,%s,%s)", (int(v_id), s_sel, total, datetime.now().date(), desc, int(cant)))
-            conn.commit(); st.success(f"Guardado por ${total:,.0f}"); st.rerun()
+            cur.execute("SET search_path TO public")
+            cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion, cantidad) VALUES (%s,%s,%s,%s,%s,%s)", 
+                       (int(v_id), s_sel, total, datetime.now().date(), desc, int(cant)))
+            conn.commit()
+            st.success(f"✅ Venta registrada por ${total:,.0f}")
+            st.rerun()
 
-# --- 📑 HOJA DE VIDA (TODOS LOS CAMPOS Y ALERTAS) ---
+# --- 📑 HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Documentos y Alertas")
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
@@ -163,7 +168,7 @@ elif menu == "📑 Hoja de Vida":
                 else: cols[i % 4].success(f"✅ {name}\n({fecha})")
             else: cols[i % 4].info(f"⚪ {name}: S/D")
 
-# --- MÓDULOS GASTOS, TARIFAS, FLOTA Y USUARIOS (ESTRUCTURA C&E) ---
+# --- MÓDULOS RESTANTES ---
 elif menu == "💸 Gastos":
     st.title("💸 Gastos")
     with st.form("f_g"):
@@ -192,5 +197,14 @@ elif menu == "🚐 Flota":
             cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond))
             conn.commit(); st.rerun()
     st.dataframe(pd.read_sql("SELECT * FROM vehiculos", conn), use_container_width=True)
+
+elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
+    st.title("⚙️ Seguridad")
+    with st.form("c_u"):
+        st.write("Cambiar clave de Luzma")
+        nueva_c = st.text_input("Nueva Clave", type="password")
+        if st.form_submit_button("Actualizar"):
+            cur = conn.cursor(); cur.execute("UPDATE usuarios SET clave = %s WHERE usuario = 'luzma'", (nueva_c,))
+            conn.commit(); st.success("Clave actualizada")
 
 conn.close()
