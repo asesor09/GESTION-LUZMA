@@ -113,7 +113,7 @@ if menu == "📊 Dashboard":
 
 # --- 💰 VENTAS (EDICIÓN COMPLETA) ---
 elif menu == "💰 Ventas":
-    st.title("💰 Producción")
+    st.title("💰 Ventas")
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     t_data = pd.read_sql("SELECT servicio, precio_unidad FROM tarifario", conn)
     tab1, tab2 = st.tabs(["📝 Registro", "✏️ Editar/Borrar"])
