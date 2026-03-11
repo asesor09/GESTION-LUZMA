@@ -50,7 +50,7 @@ inicializar_db()
 # --- 3. LOGIN ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if not st.session_state.logged_in:
-    st.sidebar.title("🔐 Acceso")
+    st.sidebar.title("🔐 Acceso tranportes Luzma")
     u_input = st.sidebar.text_input("Usuario")
     p_input = st.sidebar.text_input("Contraseña", type="password")
     if st.sidebar.button("Ingresar"):
