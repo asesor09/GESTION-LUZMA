@@ -19,11 +19,18 @@ def conectar_db():
         st.error(f"❌ Error de conexión: {e}")
         return None
 
+# --- FUNCIÓN NUEVA: GENERAR EXCEL ---
+def generar_excel(df_v, df_g):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_v.to_excel(writer, index=False, sheet_name='Ventas_Ingresos')
+        df_g.to_excel(writer, index=False, sheet_name='Gastos_Egresos')
+    return output.getvalue()
+
 def inicializar_db():
     conn = conectar_db()
     if conn:
         cur = conn.cursor()
-        # Tablas base
         cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL, marca TEXT, modelo TEXT, conductor TEXT)')
         cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT, foto_url TEXT)')
         cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT, cantidad INTEGER)')
@@ -81,8 +88,8 @@ if menu == "📊 Dashboard":
 
     if len(rango) == 2:
         params = [rango[0], rango[1]]
-        q_g = "SELECT g.fecha, v.placa, g.tipo_gasto, g.monto FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s"
-        q_v = "SELECT s.fecha, v.placa, s.valor_viaje as monto FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s"
+        q_g = "SELECT g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s"
+        q_v = "SELECT s.fecha, v.placa, s.cliente as servicio, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s"
         
         if placa_f != "TODOS":
             q_g += " AND v.placa = %s"; q_v += " AND v.placa = %s"; params.append(placa_f)
@@ -97,6 +104,12 @@ if menu == "📊 Dashboard":
         m1.metric("Ingresos Total", f"${ingresos:,.0f}")
         m2.metric("Gastos Total", f"${egresos:,.0f}", delta_color="inverse")
         m3.metric("Utilidad Neta", f"${ingresos - egresos:,.0f}")
+
+        # BOTÓN DE EXCEL EN EL DASHBOARD
+        st.divider()
+        st.subheader("📥 Descargar Reporte Consolidado")
+        excel_data = generar_excel(df_v, df_g)
+        st.download_button(label="📊 Descargar Reporte en Excel", data=excel_data, file_name=f"Reporte_Luzma_{datetime.now().date()}.xlsx")
 
 # --- MÓDULO: FLOTA ---
 elif menu == "🚐 Flota":
@@ -116,7 +129,7 @@ elif menu == "🚐 Flota":
     df_f = pd.read_sql("SELECT * FROM vehiculos", conn)
     st.dataframe(df_f, use_container_width=True, hide_index=True)
 
-# --- MÓDULO: GASTOS (CON FOTO) ---
+# --- MÓDULO: GASTOS ---
 elif menu == "💸 Gastos":
     st.title("💸 Registro de Gastos")
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
@@ -136,7 +149,12 @@ elif menu == "💸 Gastos":
                             (v_id, tipo, monto, datetime.now().date(), det))
                 conn.commit(); st.success("Gasto registrado correctamente"); st.rerun()
 
-# --- MÓDULO: HOJA DE VIDA (ALERTAS) ---
+    st.divider()
+    st.subheader("🔍 Detalle de Gastos Registrados")
+    df_g_det = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.id DESC", conn)
+    st.dataframe(df_g_det, use_container_width=True, hide_index=True)
+
+# --- MÓDULO: HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Alertas de Documentación")
     v_data_h = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
@@ -167,7 +185,6 @@ elif menu == "📑 Hoja de Vida":
                                 (v_id, s_v, t_v, p_v, pc_v, pe_v, ptr_v, to_v))
                     conn.commit(); st.success("Documentación actualizada"); st.rerun()
 
-        # Semáforo de Alertas
         df_hv = pd.read_sql('''SELECT v.placa, h.* FROM vehiculos v LEFT JOIN hoja_vida h ON v.id = h.vehiculo_id''', conn)
         hoy = datetime.now().date()
         for _, row in df_hv.iterrows():
@@ -203,6 +220,11 @@ elif menu == "💰 Ventas":
             cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion, cantidad) VALUES (%s,%s,%s,%s,%s,%s)", 
                         (v_id, s_sel, cant*precio, datetime.now().date(), desc, cant))
             conn.commit(); st.success("Venta registrada"); st.rerun()
+
+    st.divider()
+    st.subheader("🔍 Detalle de Ventas Registradas")
+    df_v_det = pd.read_sql("SELECT s.id, s.fecha, v.placa, s.cliente as servicio, s.cantidad, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.id DESC", conn)
+    st.dataframe(df_v_det, use_container_width=True, hide_index=True)
 
 # --- MÓDULO: TARIFAS ---
 elif menu == "⚙️ Tarifas":
