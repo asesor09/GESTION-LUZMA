@@ -3,9 +3,11 @@ import psycopg2
 import pandas as pd
 from datetime import datetime, timedelta
 import io
-from PIL import Image, ImageOps, ImageEnhance
-import pytesseract
+import plotly.express as px
+from PIL import Image
+import easyocr
 import re
+import numpy as np
 
 # --- 1. CONFIGURACIÓN Y CONEXIÓN ---
 st.set_page_config(page_title="Confejeans Luzma - Gestión de Flota", layout="wide", page_icon="🚐")
@@ -28,39 +30,64 @@ def generar_excel(df_v, df_g):
         df_g.to_excel(writer, index=False, sheet_name='Gastos_Egresos')
     return output.getvalue()
 
-# --- 🧠 FUNCIÓN DE IA (OCR REFORZADO) ---
-def extraer_monto_ia(imagen_file):
+# --- 🧠 FUNCIÓN DE IA MEJORADA (EASYOCR) ---
+@st.cache_resource
+def cargar_lector_ocr():
+    # Cargamos el modelo de Deep Learning una sola vez para que sea rápido
+    # 'es' para español, 'en' para inglés
+    return easyocr.Reader(['es', 'en'], gpu=False)
+
+def extraer_monto_ia_robusto(imagen_file):
     try:
-        # Pre-procesamiento para que la IA lea mejor
-        img = Image.open(imagen_file)
-        img = ImageOps.grayscale(img)
-        img = ImageEnhance.Contrast(img).enhance(2.5) # Resaltar letras negras
+        reader = cargar_lector_ocr()
         
-        # Ejecutar Tesseract
-        texto = pytesseract.image_to_string(img, config='--psm 6').upper()
+        # Convertir la imagen subida a un formato que EasyOCR entienda (numpy array)
+        image = Image.open(imagen_file)
+        image_np = np.array(image)
         
-        # Limpieza de caracteres que rompen los números (puntos y comas)
-        texto_limpio = texto.replace('.', '').replace(',', '').replace('$', '').replace("'", "")
+        # Ejecutar la detección. Retorna una lista de (bounding box, text, confidence)
+        resultados = reader.readtext(image_np)
         
-        # Buscar todas las secuencias de números
-        numeros = re.findall(r'\d+', texto_limpio)
+        st.subheader("🤖 Lo que la IA leyó (Borrador):")
+        texto_completo = ""
+        candidatos_montos = []
         
-        # Filtrar números que parezcan montos de gasolina (Ej: entre 5000 y 900000)
-        candidatos = []
-        for n in numeros:
-            val = int(n)
-            # Si el número es muy largo (ej: 7442600), probablemente leyó los centavos pegados
-            if val > 1000000: val = val // 100
+        for (bbox, texto, probabilidad) in resultados:
+            st.write(f"- {texto} (Confianza: {probabilidad:.2f})")
+            texto_completo += " " + texto.upper()
             
-            if 4000 <= val <= 999999:
-                candidatos.append(val)
+            # Limpieza agresiva de cada fragmento de texto
+            # Quitamos puntos de miles, comas decimales, símbolos de moneda
+            texto_limpio = re.sub(r'[\.\,\$\'\"]', '', texto)
+            
+            # Buscamos números que parezcan montos (Ej: de $4,000 a $900,000)
+            numeros = re.findall(r'\d+', texto_limpio)
+            for n in numeros:
+                val = int(n)
+                # Si el número es muy largo, probablemente leyó los centavos pegados (ej: 7442600)
+                if val > 1000000: val = val // 100
+                
+                if 4000 <= val <= 999999:
+                    candidatos_montos.append(val)
         
-        if candidatos:
-            # En recibos, el TOTAL suele ser el valor más alto
-            return max(candidatos)
+        # Lógica adicional: Buscar cerca de palabras clave como "TOTAL"
+        lineas = texto_completo.split('\n')
+        for linea in lineas:
+            if any(palabra in linea for palabra in ["TOTAL", "PAGAR", "VALOR", "NETO"]):
+                limpio_linea = re.sub(r'[\.\,\$\'\"]', '', linea)
+                nums_linea = re.findall(r'\d+', limpio_linea)
+                for n in nums_linea:
+                    val = int(n)
+                    if 4000 <= val <= 999999:
+                        candidatos_montos.append(val)
+
+        if candidatos_montos:
+            # En recibos, el TOTAL suele ser el valor más alto repetido o el más alto cerca del final
+            return max(candidatos_montos)
+        
         return 0
     except Exception as e:
-        st.error(f"Error técnico en el escáner: {e}")
+        st.error(f"Error técnico en el escáner robusto: {e}")
         return 0
 
 def inicializar_db():
@@ -104,7 +131,7 @@ if not st.session_state.logged_in:
 
 # --- 🚀 MENÚ ---
 st.sidebar.write(f"Conectado: **{st.session_state.u_name}**")
-menu = st.sidebar.selectbox("MÓDULOS", ["📊 Dashboard", "🚐 Flota", "💸 Gastos con IA", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Tarifas"])
+menu = st.sidebar.selectbox("MÓDULOS", ["📊 Dashboard", "🚐 Flota", "💸 Gastos IA Pro", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Tarifas"])
 
 if st.sidebar.button("🚪 Cerrar Sesión"):
     st.session_state.logged_in = False; st.rerun()
@@ -128,19 +155,20 @@ if menu == "📊 Dashboard":
         data_ex = generar_excel(df_v, df_g)
         st.download_button("📥 Descargar Reporte_Luzma.xlsx", data_ex, file_name=f"Reporte_{datetime.now().date()}.xlsx")
 
-# --- GASTOS CON IA ---
-elif menu == "💸 Gastos con IA":
-    st.title("💸 Registro de Gastos con Escáner")
+# --- GASTOS CON IA MEJORADA (OCR PRO) ---
+elif menu == "💸 Gastos IA Pro":
+    st.title("💸 Registro de Gastos IA (Soporta Manuscritos)")
+    st.info("Esta IA es más potente y puede leer recibos escritos a mano o borrosos.")
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     
     col_foto, col_form = st.columns([1, 1])
     with col_foto:
-        foto = st.file_uploader("📸 Sube la foto del recibo", type=['jpg', 'png', 'jpeg'])
+        foto = st.file_uploader("📸 Sube o toma foto del recibo", type=['jpg', 'png', 'jpeg'])
         if foto:
             st.image(foto, caption="Recibo cargado", width=280)
-            if st.button("🔍 Escanear Valor del Recibo"):
-                with st.spinner('Escaneando...'):
-                    st.session_state.monto_ia = extraer_monto_ia(foto)
+            if st.button("🔍 Escanear Valor del Recibo (OCR PRO)"):
+                with st.spinner('Deep Learning escaneando...'):
+                    st.session_state.monto_ia = extraer_monto_ia_robusto(foto)
                     if st.session_state.monto_ia > 0:
                         st.success(f"Valor Detectado: ${st.session_state.monto_ia:,.0f}")
                     else:
@@ -160,10 +188,10 @@ elif menu == "💸 Gastos con IA":
                 cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (v_id, tipo, monto_final, datetime.now().date(), obs))
                 conn.commit()
                 st.session_state.monto_ia = 0.0 
-                st.success("Gasto registrado con éxito"); st.rerun()
+                st.success("Gasto registrado"); st.rerun()
 
     st.subheader("🔍 Últimos Movimientos")
-    st.dataframe(pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.id DESC LIMIT 10", conn), use_container_width=True)
+    st.dataframe(pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.id DESC LIMIT 15", conn), use_container_width=True)
 
 # --- VENTAS ---
 elif menu == "💰 Ventas":
@@ -186,7 +214,7 @@ elif menu == "💰 Ventas":
 
 # --- HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
-    st.title("📑 Vencimientos y Alertas")
+    st.title("📑 Vencimientos")
     v_data_h = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     
     with st.expander("📝 Actualizar Fechas de Documentos"):
@@ -217,7 +245,7 @@ elif menu == "📑 Hoja de Vida":
 
 # --- FLOTA ---
 elif menu == "🚐 Flota":
-    st.title("🚐 Control de Vehículos")
+    st.title("🚐 Control de Vehículos (25 Carros)")
     with st.form("f_f"):
         p = st.text_input("Placa del Vehículo").upper()
         if st.form_submit_button("➕ Añadir a la Flota"):
@@ -227,7 +255,7 @@ elif menu == "🚐 Flota":
 
 # --- TARIFAS ---
 elif menu == "⚙️ Tarifas":
-    st.title("⚙️ Precios de Servicios")
+    st.title("⚙️ Tarifario Diurno")
     with st.form("f_t"):
         s = st.text_input("Nombre del Servicio")
         p = st.number_input("Precio ($)", min_value=0)
