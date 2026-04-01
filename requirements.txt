@@ -2,6 +2,8 @@ streamlit
 psycopg2-binary
 pandas
 xlsxwriter
-pytesseract
-pillow
 opencv-python-headless
+pytesseract
+easyocr
+pillow
+numpy
