@@ -6,7 +6,7 @@ xlsxwriter
 opencv-python-headless
 pytesseract
 pillow
-
+pyzbar
 
 
 
