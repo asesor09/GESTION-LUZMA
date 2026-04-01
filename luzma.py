@@ -3,7 +3,7 @@ import psycopg2
 import pandas as pd
 from datetime import datetime, timedelta
 import io
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 import pytesseract
 import re
 
@@ -31,32 +31,22 @@ def generar_excel(df_v, df_g):
 # --- 🧠 FUNCIÓN DE IA (OCR OPTIMIZADO) ---
 def extraer_monto_ia(imagen_file):
     try:
-        # Abrir y pre-procesar imagen para mejorar lectura
         img = Image.open(imagen_file)
-        img = ImageOps.grayscale(img)  # Convertir a blanco y negro
-        
-        # Extraer texto
+        img = ImageOps.grayscale(img)
+        img = ImageEnhance.Contrast(img).enhance(2.0)
         texto = pytesseract.image_to_string(img, config='--psm 6').upper()
         
-        # Lógica de búsqueda: Buscamos líneas que tengan "TOTAL" o "PAGAR"
-        lineas = texto.split('\n')
+        texto_limpio = texto.replace('.', '').replace(',', '').replace('$', '').replace("'", "")
+        numeros = re.findall(r'\d+', texto_limpio)
+        
         candidatos = []
+        for n in numeros:
+            val = int(n)
+            if val > 1000000: val = val // 100
+            if 3000 <= val <= 999999:
+                candidatos.append(val)
         
-        for linea in lineas:
-            if any(palabra in linea for palabra in ["TOTAL", "PAGAR", "VALOR", "NETO", "CONTADO"]):
-                # Extraer solo números, quitando puntos de miles y comas
-                limpio = re.sub(r'\D', ' ', linea)
-                nums = [int(s) for s in limpio.split() if len(s) >= 4]
-                candidatos.extend(nums)
-        
-        if candidatos:
-            return max(candidatos) # El total suele ser el número más alto cerca de la palabra TOTAL
-            
-        # Si falla lo anterior, buscar el número más grande de 4 a 7 cifras en todo el texto
-        todos_los_nums = re.sub(r'\D', ' ', texto)
-        nums_generales = [int(s) for s in todos_los_nums.split() if 4 <= len(s) <= 7]
-        
-        return max(nums_generales) if nums_generales else 0
+        return max(candidatos) if candidatos else 0
     except:
         return 0
 
@@ -64,16 +54,13 @@ def inicializar_db():
     conn = conectar_db()
     if conn:
         cur = conn.cursor()
-        cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL, marca TEXT, modelo TEXT, conductor TEXT)')
+        cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL)')
         cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT)')
-        cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT, cantidad INTEGER)')
+        cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, cantidad INTEGER)')
         cur.execute('CREATE TABLE IF NOT EXISTS tarifario (id SERIAL PRIMARY KEY, servicio TEXT UNIQUE NOT NULL, precio_unidad NUMERIC NOT NULL)')
-        cur.execute('''CREATE TABLE IF NOT EXISTS hoja_vida (
-                        id SERIAL PRIMARY KEY, vehiculo_id INTEGER UNIQUE REFERENCES vehiculos(id), 
-                        soat_vence DATE, tecno_vence DATE, prev_vence DATE,
-                        p_contractual DATE, p_extracontractual DATE, p_todoriesgo DATE, t_operaciones DATE)''')
-        cur.execute("CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nombre TEXT, usuario TEXT UNIQUE NOT NULL, clave TEXT NOT NULL, rol TEXT DEFAULT 'admin')")
-        cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES ('Luzma Admin', 'admin', 'Luzma2026', 'admin') ON CONFLICT (usuario) DO NOTHING")
+        cur.execute('CREATE TABLE IF NOT EXISTS hoja_vida (id SERIAL PRIMARY KEY, vehiculo_id INTEGER UNIQUE REFERENCES vehiculos(id), soat_vence DATE, tecno_vence DATE)')
+        cur.execute("CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, usuario TEXT UNIQUE, clave TEXT)")
+        cur.execute("INSERT INTO usuarios (usuario, clave) VALUES ('admin', 'Luzma2026') ON CONFLICT DO NOTHING")
         conn.commit()
         conn.close()
 
@@ -88,20 +75,13 @@ if not st.session_state.logged_in:
     u = st.sidebar.text_input("Usuario")
     p = st.sidebar.text_input("Clave", type="password")
     if st.sidebar.button("Entrar"):
-        conn = conectar_db()
-        if conn:
-            cur = conn.cursor()
-            cur.execute("SELECT nombre, rol FROM usuarios WHERE usuario = %s AND clave = %s", (u, p))
-            res = cur.fetchone()
-            conn.close()
-            if res:
-                st.session_state.logged_in, st.session_state.u_name = True, res[0]
-                st.rerun()
-            else: st.sidebar.error("Error de acceso")
+        if u == "admin" and p == "Luzma2026":
+            st.session_state.logged_in = True
+            st.rerun()
+        else: st.sidebar.error("Error de acceso")
     st.stop()
 
 # --- 🚀 MENÚ ---
-st.sidebar.write(f"Conectado como: **{st.session_state.u_name}**")
 menu = st.sidebar.selectbox("MÓDULOS", ["📊 Dashboard", "🚐 Flota", "💸 Gastos con IA", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Tarifas"])
 
 conn = conectar_db()
@@ -110,8 +90,10 @@ if not conn: st.stop()
 # --- 📊 DASHBOARD ---
 if menu == "📊 Dashboard":
     st.title("📊 Dashboard de Control")
-    df_v = pd.read_sql("SELECT s.fecha, v.placa, s.valor_viaje as monto FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id", conn)
-    df_g = pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id", conn)
+    
+    # Consultas para el Dashboard
+    df_v = pd.read_sql("SELECT s.fecha, v.placa, s.cliente as servicio, s.cantidad, s.valor_viaje as monto FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.fecha DESC", conn)
+    df_g = pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
     
     c1, c2, c3 = st.columns(3)
     c1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}")
@@ -119,6 +101,17 @@ if menu == "📊 Dashboard":
     c3.metric("Utilidad", f"${df_v['monto'].sum() - df_g['monto'].sum():,.0f}")
     
     st.divider()
+    
+    # Detalle de Ventas y Gastos
+    col_v, col_g = st.columns(2)
+    with col_v:
+        st.subheader("📝 Detalle de Ventas")
+        st.dataframe(df_v, use_container_width=True, hide_index=True)
+    
+    with col_g:
+        st.subheader("💸 Detalle de Gastos")
+        st.dataframe(df_g, use_container_width=True, hide_index=True)
+
     if st.button("📦 Generar Reporte Excel"):
         data_ex = generar_excel(df_v, df_g)
         st.download_button("📥 Descargar Archivo", data_ex, file_name="Reporte_Luzma.xlsx")
@@ -127,7 +120,6 @@ if menu == "📊 Dashboard":
 elif menu == "💸 Gastos con IA":
     st.title("💸 Registro de Gastos con Escáner")
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    
     col_foto, col_form = st.columns([1, 1])
     
     with col_foto:
@@ -141,7 +133,6 @@ elif menu == "💸 Gastos con IA":
         with st.form("f_ia_g"):
             v_sel = st.selectbox("Vehículo", v_data['placa'] if not v_data.empty else [])
             tipo = st.selectbox("Concepto", ["Combustible", "Mantenimiento", "Peaje", "Otros"])
-            # Aquí aparece lo que detectó la IA, pero el usuario puede corregir
             monto_final = st.number_input("Valor detectado (Confirme)", value=float(st.session_state.monto_detectado))
             obs = st.text_input("Nota adicional")
             if st.form_submit_button("✅ Guardar Gasto"):
@@ -168,11 +159,8 @@ elif menu == "💰 Ventas":
             cur = conn.cursor()
             cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, cantidad) VALUES (%s,%s,%s,%s,%s)", (v_id, s_sel, cant*precio, datetime.now().date(), cant))
             conn.commit(); st.rerun()
-    
-    st.write("### Historial")
-    st.dataframe(pd.read_sql("SELECT s.fecha, v.placa, s.cliente as servicio, s.valor_viaje as monto FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.id DESC", conn), use_container_width=True)
 
-# --- 📑 HOJA DE VIDA ---
+# --- 📑 HOJA DE VIDA (CORREGIDA) ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     v_data_h = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
@@ -191,17 +179,30 @@ elif menu == "📑 Hoja de Vida":
 
     df_hv = pd.read_sql("SELECT v.placa, h.soat_vence, h.tecno_vence FROM vehiculos v LEFT JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
     hoy = datetime.now().date()
+    
     for _, r in df_hv.iterrows():
         st.write(f"---")
         st.subheader(f"🚚 {r['placa']}")
         cols = st.columns(2)
-        for i, (n, f) in enumerate([("SOAT", r['soat_vence']), ("TECNO", r['tecno_vence'])]):
-            if f:
-                d = (f - hoy).days
-                if d < 0: cols[i].error(f"❌ {n} VENCIDO")
-                elif d <= 15: cols[i].warning(f"⚠️ {n} ({d} días)")
-                else: cols[i].success(f"✅ {n} Ok")
-            else: cols[i].info(f"S/D {n}")
+        
+        for i, (nombre_doc, fecha_vence) in enumerate([("SOAT", r['soat_vence']), ("TECNO", r['tecno_vence'])]):
+            # CORRECCIÓN: Convertir a fecha de Python y verificar si es nulo
+            if fecha_vence is not None:
+                try:
+                    # Aseguramos que sea objeto date para la resta
+                    fecha_dt = pd.to_datetime(fecha_vence).date()
+                    dias_restantes = (fecha_dt - hoy).days
+                    
+                    if dias_restantes < 0:
+                        cols[i].error(f"❌ {nombre_doc} VENCIDO (hace {abs(dias_restantes)} días)")
+                    elif dias_restantes <= 15:
+                        cols[i].warning(f"⚠️ {nombre_doc} (Vence en {dias_restantes} días)")
+                    else:
+                        cols[i].success(f"✅ {nombre_doc} Ok ({dias_restantes} días restantes)")
+                except:
+                    cols[i].info(f"❓ Error en fecha de {nombre_doc}")
+            else:
+                cols[i].info(f"⚪ Sin fecha {nombre_doc}")
 
 # --- 🚐 FLOTA ---
 elif menu == "🚐 Flota":
