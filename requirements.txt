@@ -1,12 +1,7 @@
 streamlit
 psycopg2-binary
 pandas
-plotly
 xlsxwriter
-opencv-python-headless
 pytesseract
 pillow
-pyzbar
-easyocr
-scikit-image
-numpy
+opencv-python-headless
