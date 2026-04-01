@@ -10,5 +10,6 @@ pyzbar
 easyocr
 Pillow
 scikit-image
-
-
+easyocr
+scikit-image
+numpy
