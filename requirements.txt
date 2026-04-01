@@ -2,9 +2,6 @@ streamlit
 psycopg2-binary
 pandas
 xlsxwriter
-opencv-python-headless
 pytesseract
-easyocr
 pillow
-numpy
-plotly
+opencv-python-headless
