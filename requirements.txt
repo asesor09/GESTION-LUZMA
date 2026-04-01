@@ -5,3 +5,4 @@ xlsxwriter
 pytesseract
 pillow
 opencv-python-headless
+plotly
