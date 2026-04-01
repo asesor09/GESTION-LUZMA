@@ -38,7 +38,7 @@ def extraer_monto_ia(imagen_file):
         return max(nums) if nums else 0
     except: return 0
 
-# --- 🗄️ INICIALIZACIÓN DE TABLAS (SIN OMITIR NADA) ---
+# --- 🗄️ INICIALIZACIÓN DE TODAS LAS TABLAS ---
 def inicializar_db():
     conn = conectar_db()
     if conn:
@@ -71,20 +71,21 @@ if not st.session_state.logged_in:
         else: st.error("Usuario o clave incorrectos")
     st.stop()
 
-# --- 🚀 MENÚ ---
+# --- 🚀 MENÚ LATERAL ---
 st.sidebar.write(f"👤 **{st.session_state.u_name}**")
 if st.session_state.u_rol == "admin":
+    target = st.sidebar.number_input("🎯 Meta Utilidad ($)", value=5000000, step=500000)
     menu = st.sidebar.selectbox("📂 MÓDULOS", ["📊 Dashboard", "🚐 Flota", "💸 Gastos con IA", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Usuarios", "⚙️ Tarifas"])
 else:
-    menu = "💸 Gastos con IA" # Conductor solo carga gastos
-    st.sidebar.info("Modo Conductor: Registro de gastos activo.")
+    menu = "💸 Gastos con IA"
+    st.sidebar.info("Modo Conductor: Registro activo.")
 
 if st.sidebar.button("🚪 Salir"): st.session_state.logged_in = False; st.rerun()
 
 conn = conectar_db()
 if not conn: st.stop()
 
-# --- 📊 MÓDULO: DASHBOARD ---
+# --- 📊 DASHBOARD ---
 if menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación")
     v_list = pd.read_sql("SELECT placa FROM vehiculos", conn)['placa'].tolist()
@@ -102,12 +103,12 @@ if menu == "📊 Dashboard":
         df_v, df_g = pd.read_sql(q_v, conn, params=params), pd.read_sql(q_g, conn, params=params)
         utilidad = df_v['monto'].sum() - df_g['monto'].sum()
         
-        col_m1, col_m2, col_m3 = st.columns(3)
-        col_m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}")
-        col_m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse")
-        col_m3.metric("Utilidad Neta", f"${utilidad:,.0f}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}")
+        m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse")
+        m3.metric("Utilidad Neta", f"${utilidad:,.0f}", delta=f"{utilidad-target:,.0f}")
 
-        st.subheader("📈 Comparativa")
+        st.subheader("📈 Comparativa Venta vs Gasto")
         res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Venta'})
         res_g = df_g.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Gasto'})
         balance_df = pd.merge(res_v, res_g, on='placa', how='outer').fillna(0)
@@ -119,10 +120,10 @@ if menu == "📊 Dashboard":
             st.write("**Gastos:**"); st.dataframe(df_g, use_container_width=True, hide_index=True)
         st.download_button("📥 Excel", generar_excel(df_v, df_g, balance_df), "Reporte_Luzma.xlsx")
 
-# --- 🚐 MÓDULO: FLOTA (EDICIÓN TOTAL) ---
+# --- 🚐 FLOTA ---
 elif menu == "🚐 Flota":
-    st.title("🚐 Administración de Vehículos")
-    tab1, tab2 = st.tabs(["➕ Añadir Vehículo", "✏️ Gestionar Flota"])
+    st.title("🚐 Flota")
+    tab1, tab2 = st.tabs(["➕ Añadir", "✏️ Gestionar"])
     with tab1:
         with st.form("new_v"):
             p, ma, mo, co = st.text_input("Placa"), st.text_input("Marca"), st.text_input("Modelo"), st.text_input("Conductor")
@@ -135,23 +136,19 @@ elif menu == "🚐 Flota":
         if len(sel.selection.rows) > 0:
             row = df_f.iloc[sel.selection.rows[0]]
             with st.form("edit_v"):
-                e_p = st.text_input("Placa", row['placa'])
-                e_ma = st.text_input("Marca", row['marca'])
-                e_mo = st.text_input("Modelo", row['modelo'])
-                e_co = st.text_input("Conductor", row['conductor'])
+                n_p, n_ma, n_mo, n_co = st.text_input("Placa", row['placa']), st.text_input("Marca", row['marca']), st.text_input("Modelo", row['modelo']), st.text_input("Conductor", row['conductor'])
                 c1, c2 = st.columns(2)
                 if c1.form_submit_button("✅ Actualizar"):
-                    cur = conn.cursor(); cur.execute("UPDATE vehiculos SET placa=%s, marca=%s, modelo=%s, conductor=%s WHERE id=%s", (e_p.upper(), e_ma, e_mo, e_co, int(row['id'])))
+                    cur = conn.cursor(); cur.execute("UPDATE vehiculos SET placa=%s, marca=%s, modelo=%s, conductor=%s WHERE id=%s", (n_p.upper(), n_ma, n_mo, n_co, int(row['id'])))
                     conn.commit(); st.rerun()
                 if c2.form_submit_button("🗑️ Eliminar"):
                     cur = conn.cursor(); cur.execute("DELETE FROM vehiculos WHERE id=%s", (int(row['id']),))
                     conn.commit(); st.rerun()
 
-# --- 💸 MÓDULO: GASTOS (CON IA Y EDICIÓN DE TODO) ---
+# --- 💸 GASTOS CON IA ---
 elif menu == "💸 Gastos con IA":
-    st.title("💸 Gestión de Gastos")
-    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    tab_g1, tab_g2 = st.tabs(["📝 Registro", "✏️ Editar/Borrar"])
+    st.title("💸 Gastos")
+    tab_g1, tab_g2 = st.tabs(["📝 Nuevo Gasto", "✏️ Gestionar Registros"])
     with tab_g1:
         col_ia1, col_ia2 = st.columns(2)
         with col_ia1:
@@ -159,66 +156,64 @@ elif menu == "💸 Gastos con IA":
             if foto and st.button("🔍 Escanear"): st.session_state.monto_ia = extraer_monto_ia(foto)
             if foto: st.image(foto, width=250)
         with col_ia2:
+            v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
             with st.form("g_new"):
                 v_sel = st.selectbox("Vehículo", v_data['placa'] if not v_data.empty else [])
                 tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Viáticos", "Otros"])
                 monto = st.number_input("Valor ($)", value=float(st.session_state.get('monto_ia', 0.0)))
-                det = st.text_input("Detalle")
+                det = st.text_input("Nota")
                 if st.form_submit_button("💾 Guardar"):
                     v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
                     cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle, imagen) VALUES (%s,%s,%s,%s,%s,%s)", (int(v_id), tipo, monto, datetime.now().date(), det, foto.getvalue() if foto else None))
                     conn.commit(); st.session_state.monto_ia = 0; st.success("Guardado"); st.rerun()
     with tab_g2:
-        df_g = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle, g.imagen FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.id DESC", conn)
+        df_g = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle, g.imagen FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
         sel_g = st.dataframe(df_g.drop(columns=['imagen']), use_container_width=True, on_select="rerun", selection_mode="single-row", hide_index=True)
         if len(sel_g.selection.rows) > 0:
             row_g = df_g.iloc[sel_g.selection.rows[0]]
             if row_g['imagen']: st.image(row_g['imagen'], width=200)
             with st.form("edit_g"):
-                en_m = st.number_input("Monto", value=float(row_g['monto']))
-                en_d = st.text_input("Detalle", value=row_g['detalle'])
-                en_t = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Viáticos", "Otros"], index=["Combustible", "Peaje", "Mantenimiento", "Viáticos", "Otros"].index(row_g['tipo_gasto']))
+                en_m, en_d = st.number_input("Monto", value=float(row_g['monto'])), st.text_input("Detalle", value=row_g['detalle'])
                 c1, c2 = st.columns(2)
                 if c1.form_submit_button("✅ Actualizar"):
-                    cur = conn.cursor(); cur.execute("UPDATE gastos SET monto=%s, detalle=%s, tipo_gasto=%s WHERE id=%s", (en_m, en_d, en_t, int(row_g['id'])))
+                    cur = conn.cursor(); cur.execute("UPDATE gastos SET monto=%s, detalle=%s WHERE id=%s", (en_m, en_d, int(row_g['id'])))
                     conn.commit(); st.rerun()
                 if c2.form_submit_button("🗑️ Borrar"):
                     cur = conn.cursor(); cur.execute("DELETE FROM gastos WHERE id=%s", (int(row_g['id']),))
                     conn.commit(); st.rerun()
 
-# --- 💰 MÓDULO: VENTAS (RESTAURADO Y EDITABLE) ---
+# --- 💰 VENTAS ---
 elif menu == "💰 Ventas":
-    st.title("💰 Gestión de Ventas")
-    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    tab_v1, tab_v2 = st.tabs(["💰 Nueva Venta", "✏️ Editar/Borrar"])
+    st.title("💰 Ventas")
+    tab_v1, tab_v2 = st.tabs(["💰 Nueva Venta", "✏️ Gestionar Ventas"])
     with tab_v1:
+        v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
         t_data = pd.read_sql("SELECT servicio, precio_unidad FROM tarifario", conn)
         with st.form("v_new"):
             v_sel = st.selectbox("Vehículo", v_data['placa'])
             serv = st.selectbox("Servicio", t_data['servicio'].tolist() if not t_data.empty else [])
             cant = st.number_input("Cantidad", min_value=1)
-            if st.form_submit_button("💰 Registrar"):
+            if st.form_submit_button("Registrar"):
                 v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
                 precio = float(t_data[t_data['servicio'] == serv]['precio_unidad'].values[0])
                 cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, cantidad) VALUES (%s,%s,%s,%s,%s)", (int(v_id), serv, cant*precio, datetime.now().date(), cant))
                 conn.commit(); st.rerun()
     with tab_v2:
-        df_v = pd.read_sql("SELECT s.id, s.fecha, v.placa, s.cliente as servicio, s.valor_viaje FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.id DESC", conn)
+        df_v = pd.read_sql("SELECT s.id, s.fecha, v.placa, s.cliente, s.valor_viaje FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.id DESC", conn)
         sel_v = st.dataframe(df_v, use_container_width=True, on_select="rerun", selection_mode="single-row", hide_index=True)
         if len(sel_v.selection.rows) > 0:
             row_v = df_v.iloc[sel_v.selection.rows[0]]
             with st.form("edit_v"):
-                en_val = st.number_input("Valor Total", value=float(row_v['valor_viaje']))
-                en_cli = st.text_input("Servicio/Cliente", value=row_v['servicio'])
+                en_val = st.number_input("Valor", value=float(row_v['valor_viaje']))
                 c1, c2 = st.columns(2)
                 if c1.form_submit_button("✅ Actualizar"):
-                    cur = conn.cursor(); cur.execute("UPDATE ventas SET valor_viaje=%s, cliente=%s WHERE id=%s", (en_val, en_cli, int(row_v['id'])))
+                    cur = conn.cursor(); cur.execute("UPDATE ventas SET valor_viaje=%s WHERE id=%s", (en_val, int(row_v['id'])))
                     conn.commit(); st.rerun()
                 if c2.form_submit_button("🗑️ Borrar"):
                     cur = conn.cursor(); cur.execute("DELETE FROM ventas WHERE id=%s", (int(row_v['id']),))
                     conn.commit(); st.rerun()
 
-# --- 📑 MÓDULO: HOJA DE VIDA (SOLUCIÓN DEFINITIVA TYPEERROR) ---
+# --- 📑 HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
@@ -242,30 +237,37 @@ elif menu == "📑 Hoja de Vida":
     for _, row in df_hv.iterrows():
         st.subheader(f"🚚 {row['placa']}")
         cols = st.columns(4)
-        # Lista de documentos corregida
         docs = [("SOAT", row.get('soat_vence')), ("TECNO", row.get('tecno_vence')), ("PREV", row.get('prev_vence')), 
-                ("T.OPER", row.get('t_operaciones')), ("P.CONT", row.get('p_contractual')), ("P.EXTRA", row.get('p_extracontractual')), 
-                ("RIESGO", row.get('p_todoriesgo'))]
+                ("T.OPER", row.get('t_operaciones')), ("P.CONT", row.get('p_contractual')), ("P.EXTRA", row.get('p_extracontractual')), ("RIESGO", row.get('p_todoriesgo'))]
         for i, (name, f) in enumerate(docs):
             idx = i % 4
             if f and pd.notnull(f):
-                try:
-                    d = (f - hoy).days
-                    if d < 0: cols[idx].error(f"❌ {name}")
-                    elif d <= 15: cols[idx].warning(f"⚠️ {name} ({d}d)")
-                    else: cols[idx].success(f"✅ {name}")
-                except: cols[idx].info(f"⚪ {name}")
+                d = (f - hoy).days
+                if d < 0: cols[idx].error(f"❌ {name}")
+                elif d <= 15: cols[idx].warning(f"⚠️ {name} ({d}d)")
+                else: cols[idx].success(f"✅ {name}")
             else: cols[idx].info(f"⚪ {name}")
         st.divider()
 
 # --- ⚙️ USUARIOS ---
 elif menu == "⚙️ Usuarios":
-    st.title("⚙️ Gestión de Usuarios")
-    with st.form("u_new"):
-        nom, usr, clv, rol = st.text_input("Nombre"), st.text_input("ID"), st.text_input("Clave"), st.selectbox("Rol", ["admin", "conductor"])
+    st.title("⚙️ Usuarios")
+    with st.form("u_form"):
+        nom, usr, clv, rol = st.text_input("Nombre"), st.text_input("Usuario"), st.text_input("Clave"), st.selectbox("Rol", ["admin", "conductor"])
         if st.form_submit_button("Crear"):
             cur = conn.cursor(); cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES (%s,%s,%s,%s)", (nom, usr, clv, rol))
             conn.commit(); st.success("Creado")
     st.table(pd.read_sql("SELECT nombre, usuario, rol FROM usuarios", conn))
+
+# --- ⚙️ TARIFAS (RESTAURADO) ---
+elif menu == "⚙️ Tarifas":
+    st.title("⚙️ Tarifario")
+    with st.form("t_form"):
+        ser, pre = st.text_input("Servicio"), st.number_input("Precio por Unidad")
+        if st.form_submit_button("Guardar Tarifa"):
+            cur = conn.cursor()
+            cur.execute("INSERT INTO tarifario (servicio, precio_unidad) VALUES (%s,%s) ON CONFLICT (servicio) DO UPDATE SET precio_unidad=EXCLUDED.precio_unidad", (ser, pre))
+            conn.commit(); st.success("Tarifa Guardada"); st.rerun()
+    st.table(pd.read_sql("SELECT * FROM tarifario", conn))
 
 if conn: conn.close()
